@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cli-simulator": {
+      "command": "python3",
+      "args": ["/home/mauri/git/OllamaCodeCompanion/mcp_server.py"],
+      "env": {}
+    }
+  }
+}

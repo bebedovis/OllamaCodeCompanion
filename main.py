@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 
 import asyncio
-import json
 import re
 import sys
-from typing import AsyncIterator
 
-import httpx
 from rich.console import Console
-from rich.live import Live
 from rich.syntax import Syntax
 from rich.text import Text
 
 from midnight_style import MidnightStyle
+from mcp_server import MCPCli
+import subprocess
 
 try:
     from rich.syntax import PygmentsSyntaxTheme
@@ -20,39 +18,32 @@ try:
 except ImportError:
     _THEME = "monokai"
 
-OLLAMA_BASE = "http://localhost:11434"
 CODE_BG = "#181818"
 CODE_FENCE = re.compile(r"```(\w*)\n?(.*?)```", re.DOTALL)
-
+# Matches a fenced block, then inline backticks, then falls back to raw text
+_CMD_FENCE  = re.compile(r"```(?:\w*)\n?(.*?)```", re.DOTALL)
+_CMD_INLINE = re.compile(r"`([^`]+)`")
 console = Console()
 
 
-async def fetch_models() -> list[str]:
-    async with httpx.AsyncClient() as client:
-        try:
-            r = await client.get(f"{OLLAMA_BASE}/api/tags", timeout=5.0)
-            return [m["name"] for m in r.json().get("models", [])]
-        except Exception:
-            return []
+def extract_command(text: str) -> str:
+    """Strip prose and fences, returning only the bare shell command."""
+    m = _CMD_FENCE.search(text)
+    if m:
+        return m.group(1).strip()
+    m = _CMD_INLINE.search(text)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
 
-
-async def stream_chat(model: str, messages: list[dict]) -> AsyncIterator[str]:
-    payload = {"model": model, "messages": messages, "stream": True}
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream(
-            "POST", f"{OLLAMA_BASE}/api/chat", json=payload
-        ) as resp:
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    if content := data.get("message", {}).get("content", ""):
-                        yield content
-                    if data.get("done"):
-                        return
-                except json.JSONDecodeError:
-                    continue
+TASK_COLORS = {
+    "shell_command":  "#50b0e0",
+    "script":         "#a8cc8c",
+    "create_file":    "#a8cc8c",
+    "script_fix":     "#e8a87c",
+    "debug_error":    "#fa4d56",
+    "explain_output": "#c8b670",
+}
 
 
 def print_response(text: str) -> None:
@@ -73,22 +64,13 @@ def print_response(text: str) -> None:
 
 
 async def main() -> None:
-    models = await fetch_models()
-    if not models:
-        console.print(
-            Text(
-                "Cannot reach Ollama at localhost:11434 — is it running?",
-                style="#fa4d56",
-            )
-        )
-        sys.exit(1)
+    server = MCPCli()
 
-    model = models[0]
     console.print(Text("OllamaCodeCompanion", style="#5579f0 bold"))
-    console.print(Text(f"Model: {model}", style="#878d96"))
+    console.print(Text(f"  orchestrator : {server.orchestrator}", style="#878d96"))
+    console.print(Text(f"  executor     : {server.executor}", style="#878d96"))
     console.print(Text("Ctrl+C or Ctrl+D to quit\n", style="#878d96"))
 
-    messages: list[dict] = []
     loop = asyncio.get_event_loop()
 
     while True:
@@ -102,32 +84,24 @@ async def main() -> None:
         if not prompt:
             continue
 
-        messages.append({"role": "user", "content": prompt})
-        buf = ""
-
+        console.print(Text("  thinking…", style="#878d96"), end="\r")
         try:
-            with Live(
-                Text("▌", style="#c8b670"),
-                console=console,
-                refresh_per_second=15,
-                transient=True,
-            ) as live:
-                async for chunk in stream_chat(model, messages):
-                    buf += chunk
-                    tail = buf[-300:] if len(buf) > 300 else buf
-                    live.update(Text(f"{tail}▌", style="#b5bdc5"))
-        except httpx.ConnectError:
-            console.print(Text("Error: Cannot connect to Ollama.", style="#fa4d56"))
-            messages.pop()
-            continue
+            task_type, result = await server.dispatch(prompt)
         except Exception as exc:
             console.print(Text(f"Error: {exc}", style="#fa4d56"))
-            messages.pop()
             continue
 
-        messages.append({"role": "assistant", "content": buf})
-        console.print(Text("Ollama:", style="#c8b670 bold"))
-        print_response(buf)
+        color = TASK_COLORS.get(task_type, "#878d96")
+        console.print(Text(f"[{task_type}] Ollama:", style=f"{color} bold"))
+
+        print_response(result)
+        if task_type == "shell_command":
+            cmd = extract_command(result)
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if res.stdout:
+                console.print(Text(res.stdout.rstrip(), style=MidnightStyle.default_color))
+            if res.stderr:
+                console.print(Text(res.stderr.rstrip(), style="#fa4d56"))
         console.print()
 
 
