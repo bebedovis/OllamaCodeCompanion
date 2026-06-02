@@ -14,10 +14,11 @@ from templates import (
 )
 
 
-class MCPCli:
+class OllamaCodeCompanion:
     def __init__(self):
         self.orchestrator = "llama3:latest"
         self.executor = "qwen3-coder:30b"
+        self.history = [{}]
 
     async def _chat(self, model: str, messages: list[dict], timeout: float = 120.0) -> str:
         client = AsyncClient(timeout=timeout)
@@ -59,12 +60,18 @@ class MCPCli:
         ])
 
     async def dispatch(self, query: str) -> tuple[str, str]:
+        self.history.append({"role": "user", "content": query})
         task = await self._orchestrate(query)
         task.setdefault("structured_prompt", query)
         task_type = task.get("task_type", "shell_command")
         lang = task.get("language", "bash")
         constraints = task.get("constraints", [])
         constraint_note = f"\nConstraints: {', '.join(constraints)}" if constraints else ""
+        # Last 10 interactions
+        history = self.history[-10:]
+        history_str = "\n".join(h["role"] + ": "+h["content"] for h in history if h.get("content"))
+
+        query = history_str + "\n\nUser query: " + query
 
         print(f"Executing {task_type}")
         match task_type:
@@ -79,6 +86,7 @@ class MCPCli:
                     },
                     {"role": "user", "content": query},
                 ])
+                self.history.append({"role": "assistant", "content": result})
                 return task_type, result
 
             case "create_file":
@@ -98,6 +106,7 @@ class MCPCli:
                         ),
                     },
                 ])
+                self.history.append({"role": "assistant", "content": content})
                 return task_type, content
 
             case "script_fix":
@@ -114,13 +123,6 @@ class MCPCli:
 
         result = await self._execute(task)
 
-        file_path = task.get("file_path")
-        if file_path:
-            try:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(result)
-                return "create_file", f"Written to {file_path}\n\n{result}"
-            except OSError as e:
-                return task_type, f"Error writing to {file_path}: {e}\n\n{result}"
+        self.history.append({"role": "assistant", "content": result})
 
         return task_type, result

@@ -4,10 +4,10 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from mcp_server import MCPCli
+from dispatcher import OllamaCodeCompanion
 
 app = FastAPI(title="OllamaCodeCompanion")
-_mcp = MCPCli()
+_companion = OllamaCodeCompanion()
 
 
 class ChatRequest(BaseModel):
@@ -21,9 +21,8 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
-    task_type, result = await _mcp.dispatch(req.prompt)
+    task_type, result = await _companion.dispatch(req.prompt)
     return ChatResponse(task_type=task_type, result=result)
-
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
