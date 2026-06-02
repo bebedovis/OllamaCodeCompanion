@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 
 import asyncio
+import os
 import re
 import sys
 
+import httpx
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.text import Text
 
 from midnight_style import MidnightStyle
-from mcp_server import MCPCli
 import subprocess
+
+SERVER_URL = os.getenv("COMPANION_URL", "http://localhost:8000")
 
 try:
     from rich.syntax import PygmentsSyntaxTheme
@@ -20,10 +23,27 @@ except ImportError:
 
 CODE_BG = "#181818"
 CODE_FENCE = re.compile(r"```(\w*)\n?(.*?)```", re.DOTALL)
-# Matches a fenced block, then inline backticks, then falls back to raw text
 _CMD_FENCE  = re.compile(r"```(?:\w*)\n?(.*?)```", re.DOTALL)
 _CMD_INLINE = re.compile(r"`([^`]+)`")
+_FILE_RE    = re.compile(r"(?<!\w)(\.{0,2}/[\w./-]+\.\w+|[\w/-]+\.\w{1,6})(?!\w)")
 console = Console()
+
+
+def inject_file_context(prompt: str) -> str:
+    """Find file paths mentioned in the prompt and append their contents."""
+    attachments = []
+    for m in _FILE_RE.finditer(prompt):
+        path = m.group(1)
+        if os.path.isfile(path):
+            try:
+                content = open(path).read()
+                attachments.append(f"### {path}\n```\n{content}\n```")
+                console.print(Text(f"  attached: {path}", style="#878d96"))
+            except OSError:
+                pass
+    if attachments:
+        return prompt + "\n\n" + "\n\n".join(attachments)
+    return prompt
 
 
 def extract_command(text: str) -> str:
@@ -63,17 +83,22 @@ def print_response(text: str) -> None:
         console.print(Text(tail, style=MidnightStyle.default_color))
 
 
-async def main() -> None:
-    server = MCPCli()
+async def dispatch(client: httpx.AsyncClient, prompt: str) -> tuple[str, str]:
+    r = await client.post("/chat", json={"prompt": prompt}, timeout=300.0)
+    r.raise_for_status()
+    data = r.json()
+    return data["task_type"], data["result"]
 
+
+async def main() -> None:
     console.print(Text("OllamaCodeCompanion", style="#5579f0 bold"))
-    console.print(Text(f"  orchestrator : {server.orchestrator}", style="#878d96"))
-    console.print(Text(f"  executor     : {server.executor}", style="#878d96"))
+    console.print(Text(f"  server : {SERVER_URL}", style="#878d96"))
     console.print(Text("Ctrl+C or Ctrl+D to quit\n", style="#878d96"))
 
     loop = asyncio.get_event_loop()
 
-    while True:
+    async with httpx.AsyncClient(base_url=SERVER_URL) as client:
+      while True:
         try:
             console.print(Text("You: ", style="#50b0e0 bold"), end="")
             prompt = await loop.run_in_executor(None, sys.stdin.readline)
@@ -86,7 +111,7 @@ async def main() -> None:
 
         console.print(Text("  thinking…", style="#878d96"), end="\r")
         try:
-            task_type, result = await server.dispatch(prompt)
+            task_type, result = await dispatch(client, inject_file_context(prompt))
         except Exception as exc:
             console.print(Text(f"Error: {exc}", style="#fa4d56"))
             continue
