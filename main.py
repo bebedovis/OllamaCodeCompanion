@@ -14,6 +14,7 @@ from midnight_style import MidnightStyle
 import subprocess
 
 SERVER_URL = os.getenv("COMPANION_URL", "http://localhost:8000")
+print(SERVER_URL)
 
 try:
     from rich.syntax import PygmentsSyntaxTheme

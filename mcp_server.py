@@ -60,6 +60,7 @@ class MCPCli:
 
     async def dispatch(self, query: str) -> tuple[str, str]:
         task = await self._orchestrate(query)
+        task.setdefault("structured_prompt", query)
         task_type = task.get("task_type", "shell_command")
         lang = task.get("language", "bash")
         constraints = task.get("constraints", [])
@@ -97,13 +98,6 @@ class MCPCli:
                         ),
                     },
                 ])
-                if file_path:
-                    try:
-                        with open(file_path, "w", encoding="utf-8") as f:
-                            f.write(content)
-                        return task_type, f"Written to {file_path}\n\n{content}"
-                    except OSError as e:
-                        return task_type, f"Error writing to {file_path}: {e}\n\n{content}"
                 return task_type, content
 
             case "script_fix":
