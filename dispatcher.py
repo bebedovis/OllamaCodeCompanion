@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+import os 
 from ollama import AsyncClient
 from templates import (
     ORCHESTRATE_PROMPT,
@@ -16,8 +17,8 @@ from templates import (
 
 class OllamaCodeCompanion:
     def __init__(self):
-        self.orchestrator = "llama3:latest"
-        self.executor = "qwen3-coder:30b"
+        self.orchestrator = os.getenv("ORCHESTRATOR_MODEL","llama3:latest")
+        self.executor = os.getenv("EXECUTOR_MODEL","qwen3-coder:30b")
         self.history = [{}]
 
     async def _chat(self, model: str, messages: list[dict], timeout: float = 120.0) -> str:
